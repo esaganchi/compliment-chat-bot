@@ -11,7 +11,7 @@ import nest_asyncio
 nest_asyncio.apply()
 
 # Папка для изображений
-IMAGES_DIR = 'https://github.com/esaganchi/compliment-chat-bot/Images'
+IMAGES_DIR = 'Images'
 
 # Файл для хранения комплиментов, отправленных за текущий день
 SENT_COMPLIMENTS_FILE = 'sent_compliments.json'
