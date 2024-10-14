@@ -2,8 +2,8 @@ import json
 import random
 import os
 from datetime import datetime
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ConversationHandler
 import asyncio
 import nest_asyncio
 
@@ -38,10 +38,9 @@ def load_sent_compliments():
     if os.path.exists(SENT_COMPLIMENTS_FILE):
         with open(SENT_COMPLIMENTS_FILE, 'r', encoding='utf-8') as file:
             data = json.load(file)
-            # Проверка, если комплименты были отправлены сегодня
-            if data.get('date') == datetime.now().strftime('%Y-%m-%d'):
-                return data['compliments']
-    # Если файл не существует или дата не совпадает, возвращаем пустой список
+            if data.get('date') != datetime.now().strftime('%Y-%m-%d'):
+                return []  # Если дата изменилась, возвращаем пустой список
+            return data['compliments']
     return []
 
 # Запись отправленных комплиментов
@@ -53,11 +52,11 @@ def save_sent_compliment(compliment):
 
 # Загрузка случайного изображения из папки
 def get_random_image():
-    images = os.listdir(IMAGES_DIR)  # Список файлов в папке
-    random_image = random.choice(images)  # Случайный выбор изображения
+    images = os.listdir(IMAGES_DIR)
+    random_image = random.choice(images)
     return os.path.join(IMAGES_DIR, random_image)
 
-# Функция для отправки случайного комплимента с изображением
+# Функция для отправки случайного комплимента с изображением и инлайн-кнопками
 async def send_compliment(update: Update, context):
     compliments = load_compliments()
     sent_compliments = load_sent_compliments()
@@ -66,20 +65,23 @@ async def send_compliment(update: Update, context):
     available_compliments = [c for c in compliments if c not in sent_compliments]
 
     if not available_compliments:
-        await context.bot.send_message(chat_id=update.effective_chat.id, text="Сегодня все комплименты уже были отправлены!")
-        return
+        sent_compliments = []
+        available_compliments = compliments
 
-    # Выбираем случайный комплимент
     compliment = random.choice(available_compliments)
-
-    # Сохраняем комплимент как отправленный
     save_sent_compliment(compliment)
-
-    # Получаем случайное изображение
     image_path = get_random_image()
 
-    # Отправляем изображение и комплимент
-    await context.bot.send_photo(chat_id=update.effective_chat.id, photo=open(image_path, 'rb'), caption=compliment)
+    # Создаем инлайн-кнопки
+    keyboard = [
+        [InlineKeyboardButton("Получить еще комплимент", callback_data='compliment')],
+        [InlineKeyboardButton("Добавить комплимент", callback_data='add_compliment')],
+        [InlineKeyboardButton("Добавить фото", callback_data='add_photo')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    # Отправляем изображение и комплимент с инлайн-кнопками
+    await context.bot.send_photo(chat_id=update.effective_chat.id, photo=open(image_path, 'rb'), caption=compliment, reply_markup=reply_markup)
 
 # Функция для отправки списка доступных команд
 async def help_command(update: Update, context):
@@ -91,6 +93,18 @@ async def help_command(update: Update, context):
     )
     await context.bot.send_message(chat_id=update.effective_chat.id, text=help_text)
 
+# Функция для обработки инлайн-кнопок
+async def button_handler(update: Update, context):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == 'compliment':
+        await send_compliment(update, context)
+    elif query.data == 'add_compliment':
+        await context.bot.send_message(chat_id=update.effective_chat.id, text="Введите команду /add_compliment с текстом комплимента.")
+    elif query.data == 'add_photo':
+        await add_photo_start(update, context)
+
 # Функция для добавления нового комплимента
 async def add_compliment(update: Update, context):
     new_compliment = ' '.join(context.args)
@@ -99,8 +113,7 @@ async def add_compliment(update: Update, context):
         save_compliment(new_compliment)
         await context.bot.send_message(chat_id=update.effective_chat.id, text="Новый комплимент добавлен!")
     else:
-        await context.bot.send_message(chat_id=update.effective_chat.id,
-                                       text="Пожалуйста, добавьте текст комплимента после команды /add_compliment.")
+        await context.bot.send_message(chat_id=update.effective_chat.id, text="Пожалуйста, добавьте текст комплимента после команды /add_compliment.")
 
 # Функция для начала процесса добавления фото
 async def add_photo_start(update: Update, context):
@@ -110,9 +123,7 @@ async def add_photo_start(update: Update, context):
 # Функция для сохранения нового фото
 async def save_photo(update: Update, context):
     if update.message.photo:
-        # Получаем файл фото
         photo_file = await update.message.photo[-1].get_file()
-        # Сохраняем фото в папку 'images'
         new_photo_path = os.path.join(IMAGES_DIR, f'photo_{random.randint(1, 10000)}.jpg')
         await photo_file.download_to_drive(new_photo_path)
         await context.bot.send_message(chat_id=update.effective_chat.id, text="Фото успешно добавлено!")
@@ -125,37 +136,28 @@ async def cancel(update: Update, context):
     await context.bot.send_message(chat_id=update.effective_chat.id, text="Добавление фото отменено.")
     return ConversationHandler.END
 
-# Функция для отправки меню
+# Функция для отправки стартового меню
 async def start_command(update: Update, context):
-    # Создаем меню с кнопками
     keyboard = [
-        ['/compliment', '/add_compliment', '/add_photo', '/help']  # Кнопки меню
+        [InlineKeyboardButton("Получить комплимент", callback_data='compliment')],
+        [InlineKeyboardButton("Добавить комплимент", callback_data='add_compliment')],
+        [InlineKeyboardButton("Добавить фото", callback_data='add_photo')],
+        [InlineKeyboardButton("Помощь", callback_data='help')]
     ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)  # Настраиваем клавиатуру
-
-    await context.bot.send_message(chat_id=update.effective_chat.id, text="Выберите команду:",
-                                   reply_markup=reply_markup)
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await context.bot.send_message(chat_id=update.effective_chat.id, text="Выберите команду:", reply_markup=reply_markup)
 
 # Настройка и запуск бота
 async def main():
-    TOKEN = '7636816904:AAEdeNNl7TzqeEI5JDMWEKSD1HTTIJ1U4h0'
+    TOKEN = '7636816904:AAEdeNNl7TzqeEI5JDMWEKSD1HTTIJ1U4h0'  # Замените на ваш токен бота
 
-    # Создаем приложение
     application = Application.builder().token(TOKEN).build()
 
-    # Хендлер для команды /start
     application.add_handler(CommandHandler('start', start_command))
-
-    # Хендлер для команды /compliment
-    application.add_handler(CommandHandler('compliment', send_compliment))
-
-    # Хендлер для команды /help
     application.add_handler(CommandHandler('help', help_command))
-
-    # Хендлер для команды /add_compliment
+    application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(CommandHandler('add_compliment', add_compliment))
 
-    # ConversationHandler для добавления фото
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('add_photo', add_photo_start)],
         states={
@@ -164,14 +166,11 @@ async def main():
         fallbacks=[CommandHandler('cancel', cancel)]
     )
 
-    # Добавляем ConversationHandler в приложение
     application.add_handler(conv_handler)
 
-    # Запуск polling для обработки сообщений
     await application.run_polling()
 
 if __name__ == '__main__':
-    # Создаем папку для изображений, если её нет
     if not os.path.exists(IMAGES_DIR):
         os.makedirs(IMAGES_DIR)
 
